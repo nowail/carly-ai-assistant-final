@@ -66,6 +66,8 @@ const App: React.FC = () => {
   const [displayVolume, setDisplayVolume] = useState(0);
   const [transcription, setTranscription] = useState<TranscriptionEntry[]>([]);
   const [finalTranscription, setFinalTranscription] = useState<TranscriptionEntry[] | null>(null);
+  const [connectionRetries, setConnectionRetries] = useState(0);
+  const [isReconnecting, setIsReconnecting] = useState(false);
 
   const sessionPromiseRef = useRef<ReturnType<typeof ai.live.connect> | null>(null);
   const inputAudioContextRef = useRef<AudioContext | null>(null);
@@ -81,6 +83,9 @@ const App: React.FC = () => {
   const currentInputTranscriptionRef = useRef('');
   const currentOutputTranscriptionRef = useRef('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const connectionHealthRef = useRef<NodeJS.Timeout | null>(null);
+  const lastMessageTimeRef = useRef<number>(Date.now());
+  const maxRetries = 3;
   
   // Create a ref to hold the latest transcription state to avoid stale closures in callbacks.
   const transcriptionRef = useRef<TranscriptionEntry[]>([]);
@@ -89,11 +94,68 @@ const App: React.FC = () => {
   }, [transcription]);
 
 
+  // Connection health monitoring
+  const startConnectionHealthMonitoring = useCallback(() => {
+    if (connectionHealthRef.current) {
+      clearInterval(connectionHealthRef.current);
+    }
+    
+    connectionHealthRef.current = setInterval(() => {
+      const timeSinceLastMessage = Date.now() - lastMessageTimeRef.current;
+      const isHealthy = timeSinceLastMessage < 30000; // 30 seconds timeout
+      
+      if (!isHealthy && agentStatus === 'listening') {
+        console.warn('⚠️ Connection health check failed - no messages for 30 seconds');
+        handleConnectionRecovery();
+      }
+    }, 10000); // Check every 10 seconds
+  }, [agentStatus]);
+
+  const stopConnectionHealthMonitoring = useCallback(() => {
+    if (connectionHealthRef.current) {
+      clearInterval(connectionHealthRef.current);
+      connectionHealthRef.current = null;
+    }
+  }, []);
+
+  // Connection recovery mechanism
+  const handleConnectionRecovery = useCallback(async () => {
+    if (isReconnecting || connectionRetries >= maxRetries) {
+      console.log('❌ Max retries reached or already reconnecting, ending call');
+      handleEndCall();
+      return;
+    }
+
+    console.log(`🔄 Attempting connection recovery (attempt ${connectionRetries + 1}/${maxRetries})`);
+    setIsReconnecting(true);
+    setConnectionRetries(prev => prev + 1);
+    
+    // Clean up current session
+    if (sessionPromiseRef.current) {
+      try {
+        const session = await sessionPromiseRef.current;
+        await session.close();
+      } catch (e) {
+        console.warn('Error closing session during recovery:', e);
+      }
+      sessionPromiseRef.current = null;
+    }
+
+    // Wait a bit before retrying
+    setTimeout(() => {
+      handleStartCall();
+      setIsReconnecting(false);
+    }, 2000);
+  }, [isReconnecting, connectionRetries, maxRetries]);
+
   const handleEndCall = useCallback(() => {
     // Guard against multiple executions from button clicks and onclose events.
     if (!sessionPromiseRef.current) {
         return;
     }
+
+    // Stop health monitoring
+    stopConnectionHealthMonitoring();
 
     // Immediately nullify the ref after capturing it to make the guard effective.
     const sessionPromise = sessionPromiseRef.current;
@@ -104,10 +166,14 @@ const App: React.FC = () => {
 
     setAgentStatus('idle');
     setTranscription([]);
+    setConnectionRetries(0);
+    setIsReconnecting(false);
     currentInputTranscriptionRef.current = '';
     currentOutputTranscriptionRef.current = '';
 
-    sessionPromise.then(session => session.close());
+    sessionPromise.then(session => session.close()).catch(e => {
+      console.warn('Error closing session:', e);
+    });
 
     if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach(track => track.stop());
@@ -128,7 +194,7 @@ const App: React.FC = () => {
           inputAudioContextRef.current.close();
       }
     } catch (e) {
-        console.error("Error closing input audio context:", e);
+      console.error("Error closing input audio context:", e);
     }
     inputAudioContextRef.current = null;
 
@@ -137,7 +203,7 @@ const App: React.FC = () => {
           outputAudioContextRef.current.close();
       }
     } catch(e) {
-        console.error("Error closing output audio context:", e);
+      console.error("Error closing output audio context:", e);
     }
     outputAudioContextRef.current = null;
     
@@ -146,14 +212,16 @@ const App: React.FC = () => {
     nextStartTimeRef.current = 0;
     toolCallInProgressRef.current = false;
 
-  }, []);
+  }, [stopConnectionHealthMonitoring]);
 
 
   const handleStartCall = async () => {
     setFinalTranscription(null);
     setTranscription([]);
-    setAgentStatus('connecting');
-    setError(null);
+      setAgentStatus('connecting');
+      setError(null);
+      setConnectionRetries(0);
+      setIsReconnecting(false);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -181,6 +249,7 @@ const App: React.FC = () => {
           onopen: () => {
             console.log('Session opened.');
             setAgentStatus('listening');
+            startConnectionHealthMonitoring();
 
             if (sessionPromiseRef.current) {
                 sessionPromiseRef.current.then((session) => {
@@ -218,6 +287,9 @@ const App: React.FC = () => {
           },
           onmessage: async (message: LiveServerMessage) => {
             console.log('📨 AI MESSAGE RECEIVED:', JSON.stringify(message, null, 2));
+            
+            // Update last message time for health monitoring
+            lastMessageTimeRef.current = Date.now();
             const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             if (base64EncodedAudioString) {
               toolCallInProgressRef.current = false;
@@ -255,22 +327,46 @@ const App: React.FC = () => {
               toolCallInProgressRef.current = true;
               setAgentStatus('thinking');
               const functionResponses = [];
-              for (const fc of message.toolCall.functionCalls) {
-                console.log(`🔧 Executing tool: ${fc.name} with args:`, fc.args);
-                const result = await executeTool(fc.name, fc.args);
-                console.log(`🔧 Tool result:`, result);
-                
-                functionResponses.push({
-                    id: fc.id,
-                    name: fc.name,
-                    response: { result },
-                });
-              }
+              
+              try {
+                for (const fc of message.toolCall.functionCalls) {
+                  console.log(`🔧 Executing tool: ${fc.name} with args:`, fc.args);
+                  
+                  try {
+                    const result = await executeTool(fc.name, fc.args);
+                    console.log(`🔧 Tool result:`, result);
+                    
+                    functionResponses.push({
+                        id: fc.id,
+                        name: fc.name,
+                        response: { result },
+                    });
+                  } catch (toolError) {
+                    console.error(`❌ Tool execution error for ${fc.name}:`, toolError);
+                    
+                    // Send error response instead of crashing
+                    functionResponses.push({
+                        id: fc.id,
+                        name: fc.name,
+                        response: { 
+                          error: `Tool execution failed: ${toolError instanceof Error ? toolError.message : 'Unknown error'}`,
+                          result: JSON.stringify({ error: "Tool execution failed", cars: [] })
+                        },
+                    });
+                  }
+                }
 
-              if (sessionPromiseRef.current && functionResponses.length > 0) {
-                  sessionPromiseRef.current.then(session => {
-                      session.sendToolResponse({ functionResponses });
-                  });
+                if (sessionPromiseRef.current && functionResponses.length > 0) {
+                    sessionPromiseRef.current.then(session => {
+                        session.sendToolResponse({ functionResponses });
+                    }).catch(sessionError => {
+                      console.error('❌ Error sending tool response:', sessionError);
+                      handleConnectionRecovery();
+                    });
+                }
+              } catch (error) {
+                console.error('❌ Critical error in tool execution:', error);
+                handleConnectionRecovery();
               }
             }
             
@@ -320,13 +416,31 @@ const App: React.FC = () => {
           },
           onerror: (e: ErrorEvent) => {
             console.error('Session error:', e);
-            setError(`An error occurred: ${e.message}. Please try again.`);
-            setAgentStatus('error');
-            handleEndCall();
+            
+            // Don't immediately end call for recoverable errors
+            if (connectionRetries < maxRetries && !isReconnecting) {
+              console.log('🔄 Attempting to recover from session error...');
+              handleConnectionRecovery();
+            } else {
+              setError(`Connection error: ${e.message}. Please try again.`);
+              setAgentStatus('error');
+              handleEndCall();
+            }
           },
-          onclose: () => {
-            console.log('Session closed.');
-            handleEndCall();
+          onclose: (event) => {
+            console.log('Session closed:', event);
+            
+            // Only end call if it wasn't a planned closure
+            if (agentStatus !== 'idle' && !isReconnecting) {
+              console.log('🔄 Unexpected session close, attempting recovery...');
+              if (connectionRetries < maxRetries) {
+                handleConnectionRecovery();
+              } else {
+                setError('Connection lost. Please try again.');
+                setAgentStatus('error');
+                handleEndCall();
+              }
+            }
           },
         },
       });
@@ -390,9 +504,10 @@ const App: React.FC = () => {
 
   useEffect(() => {
     return () => {
+      stopConnectionHealthMonitoring();
       handleEndCall();
     };
-  }, [handleEndCall]);
+  }, [handleEndCall, stopConnectionHealthMonitoring]);
 
 
   return (
@@ -411,6 +526,14 @@ const App: React.FC = () => {
             <div className="flex flex-col h-full items-center justify-between">
                 <div className="p-4 w-full border-b">
                   <VoiceVisualizer status={agentStatus} volume={displayVolume} />
+                  {isReconnecting && (
+                    <div className="mt-2 text-center">
+                      <div className="inline-flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm">
+                        <div className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div>
+                        Reconnecting... ({connectionRetries + 1}/{maxRetries})
+                      </div>
+                    </div>
+                  )}
                 </div>
                 
                 <div ref={chatScrollRef} className="flex-grow w-full overflow-y-auto px-6 py-4 space-y-4 bg-gray-50">
