@@ -56,6 +56,17 @@ Your goal is to handle one of four main use cases: Lead Capture, Financing, Cash
     * If a user asks for "سيارة شبابية" (a youthful car), you should search for sporty models like \`body_type: 'Coupe'\` or sedans like the Dodge Charger.
 3.  **Do not ask for information you can infer.** If the user gives you enough descriptive information, make an intelligent search. For example, if they say "I need a big white American car for my family," you can infer \`body_type: 'SUV'\`, \`color: 'White'\`, and check for American makes like Ford, Chevrolet, etc. without asking for each parameter one by one.
 
+-- CRITICAL YEAR RECOGNITION RULES (NON-NEGOTIABLE) --
+1.  **ALWAYS normalize year input regardless of how it's spoken.** Users may say years in various ways:
+    * "20 23" or "twenty twenty-three" → convert to \`year: 2023\`
+    * "two thousand twenty three" → convert to \`year: 2023\`
+    * "twenty twenty" → convert to \`year: 2020\`
+    * "nineteen ninety five" → convert to \`year: 1995\`
+    * "95" or "ninety five" → convert to \`year: 1995\` (assume 1900s for 2-digit years)
+2.  **Handle space-separated digits as single years.** If you hear "20 23", "20-23", or "20.23", treat it as the year 2023.
+3.  **Validate year ranges.** Only accept years between 1990 and 2025 for used cars. If user mentions years outside this range, ask for clarification.
+4.  **Be proactive with year context.** If user says "a 2020 car" or "from 2020", extract \`year: 2020\` immediately.
+
 -- CRITICAL DIRECTIVE: EFFICIENT & CONTEXTUAL LISTENING --
 1.  Listen carefully to the user's entire statement to extract all explicit and implicit details. This is key to being proactive and reducing questions.
 2.  NEVER repeat a question if the user has already provided the information.
@@ -120,7 +131,7 @@ export const functionDeclarations: FunctionDeclaration[] = [
         properties: {
           make: {type: Type.STRING, description: "The brand of the car, e.g., 'Toyota', 'Ford'. Can be inferred from user asking for 'American' or 'Japanese' cars."},
           model: {type: Type.STRING},
-          year: {type: Type.INTEGER},
+          year: {type: Type.INTEGER, description: "The car's model year. Normalize spoken years like '20 23' to 2023, 'twenty twenty-three' to 2023, or '95' to 1995. Accept years between 1990-2025."},
           trim: {type: Type.STRING},
           price_min: {type: Type.NUMBER},
           price_max: {type: Type.NUMBER, description: "The maximum price. Infer this from user phrases like 'around 80k' or 'my budget is 100,000'."},

@@ -9,6 +9,42 @@ const validateCarExists = (make: string, model: string): boolean => {
     car.model?.toLowerCase().includes(model.toLowerCase())
   );
 };
+
+// Enhanced year normalization function
+const normalizeYear = (yearInput: any): number | null => {
+  if (!yearInput) return null;
+  
+  let yearStr = String(yearInput).trim();
+  
+  // Remove common separators and spaces
+  yearStr = yearStr.replace(/[\s,\-\.]/g, "");
+  
+  // Handle two-digit years (assume 1900s for years < 50, 2000s for years >= 50)
+  if (yearStr.length === 2) {
+    const twoDigitYear = parseInt(yearStr, 10);
+    if (!Number.isNaN(twoDigitYear)) {
+      return twoDigitYear < 50 ? 2000 + twoDigitYear : 1900 + twoDigitYear;
+    }
+  }
+  
+  // Handle four-digit years
+  if (yearStr.length === 4) {
+    const fourDigitYear = parseInt(yearStr, 10);
+    if (!Number.isNaN(fourDigitYear)) {
+      return fourDigitYear;
+    }
+  }
+  
+  // Handle three-digit years (assume 2000s)
+  if (yearStr.length === 3) {
+    const threeDigitYear = parseInt(yearStr, 10);
+    if (!Number.isNaN(threeDigitYear)) {
+      return 2000 + threeDigitYear;
+    }
+  }
+  
+  return null;
+};
 const getAvailableMakes = (): string[] => {
   if (!carInventory) return [];
   return [...new Set(carInventory.map(c => c.make).filter(Boolean))];
@@ -282,37 +318,70 @@ export const executeTool = async (name: string, args: any): Promise<any> => {
       }
       
       if (args.year) {
-        const y = parseInt(String(args.year).replace(/,/g, ""), 10);
-        if (!Number.isNaN(y)) results = results.filter(c => c.year === y);
+        // Use enhanced year normalization
+        const normalizedYear = normalizeYear(args.year);
+        
+        // Validate year range (1990-2025 for used cars)
+        if (normalizedYear && normalizedYear >= 1990 && normalizedYear <= 2025) {
+          results = results.filter(c => {
+            // Use raw JSON field for year filtering
+            const carYear = parseInt(String(c["Year"] || 0), 10);
+            return carYear === normalizedYear;
+          });
+          console.log(`✅ Filtering by year: ${normalizedYear} (from input: ${args.year})`);
+        } else {
+          console.log(`⚠️ Invalid year: ${args.year} (normalized as ${normalizedYear}) - skipping year filter`);
+        }
       }
       
       if (args.price_max) { 
         const p = parseFloat(String(args.price_max).replace(/,/g, "")); 
-        if (!Number.isNaN(p)) results = results.filter(c => c.price != null && c.price <= p); 
+        if (!Number.isNaN(p)) results = results.filter(c => {
+          const carPrice = parseFloat(String(c["Price"] || 0));
+          return !Number.isNaN(carPrice) && carPrice <= p;
+        }); 
       }
       if (args.price_min) { 
         const p = parseFloat(String(args.price_min).replace(/,/g, "")); 
-        if (!Number.isNaN(p)) results = results.filter(c => c.price != null && c.price >= p); 
+        if (!Number.isNaN(p)) results = results.filter(c => {
+          const carPrice = parseFloat(String(c["Price"] || 0));
+          return !Number.isNaN(carPrice) && carPrice >= p;
+        }); 
       }
       if (args.mileage_max) { 
         const m = parseInt(String(args.mileage_max).replace(/,/g, ""), 10); 
-        if (!Number.isNaN(m)) results = results.filter(c => c.mileage != null && c.mileage <= m); 
+        if (!Number.isNaN(m)) results = results.filter(c => {
+          const carMileage = parseInt(String(c["CurrentKM"] || 0), 10);
+          return !Number.isNaN(carMileage) && carMileage <= m;
+        }); 
       }
       if (args.body_type) {
         const bodyFilter = String(args.body_type).toLowerCase();
-        results = results.filter(c => c.body_type?.toLowerCase().includes(bodyFilter));
+        results = results.filter(c => {
+          const carBodyType = c["Body Type"]?.toLowerCase().trim() || '';
+          return carBodyType.includes(bodyFilter);
+        });
       }
       if (args.color) {
         const colorFilter = String(args.color).toLowerCase();
-        results = results.filter(c => c.color?.toLowerCase().includes(colorFilter));
+        results = results.filter(c => {
+          const carColor = c["Exterior color"]?.toLowerCase().trim() || '';
+          return carColor.includes(colorFilter);
+        });
       }
       if (args.transmission) {
         const transFilter = String(args.transmission).toLowerCase();
-        results = results.filter(c => c.transmission?.toLowerCase().includes(transFilter));
+        results = results.filter(c => {
+          const carTransmission = c["Transmission"]?.toLowerCase().trim() || '';
+          return carTransmission.includes(transFilter);
+        });
       }
       if (args.fuel_type) {
         const fuelFilter = String(args.fuel_type).toLowerCase();
-        results = results.filter(c => c.fuel_type?.toLowerCase().includes(fuelFilter));
+        results = results.filter(c => {
+          const carFuelType = c["Fuel type"]?.toLowerCase().trim() || '';
+          return carFuelType.includes(fuelFilter);
+        });
       }
       console.log(`✅ Filtered results: ${results.length} cars`);
       if (results.length === 0) {
