@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Carly AI Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.21.0",
+    "path": "https://aistudiocdn.com/path@^0.12.7",
+    "@vitejs/plugin-react": "https://aistudiocdn.com/@vitejs/plugin-react@^5.0.4",
+    "vite": "https://aistudiocdn.com/vite@^7.1.9"
+  }
+}
+</script>
+<style>
+  @keyframes speak-animation {
+    0%, 100% { transform: scaleY(0.2); }
+    20% { transform: scaleY(1.0); }
+    40% { transform: scaleY(0.4); }
+    60% { transform: scaleY(0.8); }
+    80% { transform: scaleY(0.6); }
+  }
+  .speak-bar {
+    animation: speak-animation 1.2s infinite ease-in-out;
+  }
+
+  @keyframes thinking-rotation {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  @keyframes thinking-pulse-color {
+    0%, 100% {
+      transform: scale(1);
+      color: #9CA3AF; /* Tailwind gray-400 */
+    }
+    50% {
+      transform: scale(1.1);
+      color: #EF4444; /* Tailwind red-500 */
+    }
+  }
+
+  .thinking-rays {
+      animation: thinking-rotation 2.5s linear infinite;
+      transform-origin: center;
+  }
+  .thinking-center {
+      animation: thinking-pulse-color 2s ease-in-out infinite;
+      transform-origin: center;
+  }
+  
+</style>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-gray-100">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

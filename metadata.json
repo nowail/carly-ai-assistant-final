@@ -1,0 +1,7 @@
+{
+  "name": "Carly AI Assistant",
+  "description": "An advanced agentic voice AI for Carly, a used-car marketplace. This AI handles complex user queries about inventory, specifications, and financing by autonomously using tools.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
